@@ -2,7 +2,7 @@ import numpy as np
 
 class Polymer:
 
-    def __init__(self, length, radius):
+    def __init__(self, length, diameter):
         self.monomers = [] # Will be filled using initializePolymer() in sim!
         self.numMonomers = length
-        self.monomerRadius = radius
+        self.monomerDiam = diameter

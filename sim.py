@@ -1,34 +1,36 @@
 from polymer import Polymer
 from particles import Particles
+from util import periodic_dist, find_bond_angle, get_positions
+from scipy.spatial.distance import pdist, cdist
 import matplotlib.pyplot as plt
 import numpy as np
 from math import *
 
 class Sim:
 
-    def __init__(self, boxDimensions, numMonomers, monomerRadius, particleRadius, particleSpacing,latticeType):
+    def __init__(self, boxDimensions, numMonomers, monomerDiam, particleDiam, particleSpacing,latticeType):
         self.x = boxDimensions[0]
         self.y = boxDimensions[1]
         self.z = boxDimensions[2]
 
-        self.polymer = Polymer(numMonomers, monomerRadius)
-        self.particles = Particles(particleRadius, particleSpacing, latticeType, boxDimensions)
+        self.polymer = Polymer(numMonomers, monomerDiam)
+        self.particles = Particles(particleDiam, particleSpacing, latticeType, boxDimensions)
 
         # CONSTANTS FROM PAPER
         self.epsilon = 1
-        self.delta = 0.2*monomerRadius
-        self.r_eq = 0.8*monomerRadius
-        self.r_max = 1.3*monomerRadius
-        self.k_f = 100*self.epsilon/(monomerRadius**2)
+        self.delta = 0.2*monomerDiam
+        self.r_eq = 0.8*monomerDiam
+        self.r_max = 1.3*monomerDiam
+        self.k_f = 100*self.epsilon/(monomerDiam**2)
         self.k_bT = 1
 
         self.k_theta = 1
         self.epsilon_PN = 1
 
         if latticeType == 'repulsive':
-            self.r_c = 2.5*monomerRadius
+            self.r_c = 2.5*monomerDiam
         elif latticeType == 'attractive':
-            self.r_c = monomerRadius
+            self.r_c = monomerDiam
         else:
             print("Invalid lattice type provided! It must be either attractive or repulsive.")
             exit(-1)
@@ -56,7 +58,7 @@ class Sim:
             distToCurrent = np.linalg.norm(distToCurrent, axis=1)
 
             # Compute the sum of the radii
-            overlap_dist = self.polymer.monomerRadius + self.particles.radius
+            overlap_dist = self.polymer.monomerDiam/2 + self.particles.diameter/2
 
             # Check if there is any overlap
             overlap = np.any(distToCurrent < overlap_dist)
@@ -69,29 +71,33 @@ class Sim:
         for i in range(self.polymer.numMonomers-1):
             lastPoint = currentPoint
             passesChecks = False
-            while not passesChecks:
 
+            while not passesChecks:
+                # Choose two random angles
                 theta = np.random.random()*2*pi
                 phi = np.random.random()*2*pi
 
-                currentPoint = (lastPoint + np.array([self.polymer.monomerRadius* 2 * sin(theta) * cos(phi), 
-                                                      self.polymer.monomerRadius * 2 * sin(theta) * sin(phi), 
-                                                      self.polymer.monomerRadius * 2 * cos(theta)])) % boundaries
+                # Convert angles to x, y, z, using spherical coordinates
+                currentPoint = (lastPoint + np.array([self.polymer.monomerDiam * sin(theta) * cos(phi), 
+                                                      self.polymer.monomerDiam * sin(theta) * sin(phi), 
+                                                      self.polymer.monomerDiam * cos(theta)])) % boundaries
 
+                # Convert our list of monomers to a numpy array so following operations will work
                 monomersSoFar = np.array(monomers)
-                
 
                 distToCurrentForLattice = currentPoint - self.particles.lattice
                 distToCurrentForMonomers = currentPoint - monomersSoFar
 
+                # Adjust distances appropriately using periodic boundary conditions
                 distToCurrentForLattice = distToCurrentForLattice - boundaries * np.round(distToCurrentForLattice / boundaries)
                 distToCurrentForMonomers = distToCurrentForMonomers - boundaries * np.round(distToCurrentForMonomers / boundaries)
 
                 distToCurrentForLattice = np.linalg.norm(distToCurrentForLattice, axis=1)
                 distToCurrentForMonomers = np.linalg.norm(distToCurrentForMonomers, axis=1)
 
-                lattice_overlap_dist = self.polymer.monomerRadius + self.particles.radius
-                monomer_overlap_dist = self.polymer.monomerRadius*2
+                # Calculate distance where there's overlaps
+                lattice_overlap_dist = self.polymer.monomerDiam/2 + self.particles.diameter/2
+                monomer_overlap_dist = self.polymer.monomerDiam
 
                 # Check if there is any overlap with both the lattice particles and current monomers
                 lattice_overlap = np.any(distToCurrentForLattice <= lattice_overlap_dist)
@@ -105,49 +111,76 @@ class Sim:
         
         self.polymer.monomers = np.array(monomers)
             
+
+
     def betweenMonomers(self, monomers):
         E = 0
+        boundaries = np.array([self.x, self.y, self.z])
 
-        for i in range(len(monomers)):
-            # Find the energy associated with non-bonded monomer interactions
-            bondedMonomers = []
-            nonBondedMonomers = []
+        # Find the pairwise distances between all monomers using pdist w. custom dist function
+        pairwiseDists = pdist(monomers, metric=periodic_dist, L=boundaries)
 
-            # Find the energy associated with bonded monomer interactions
+        # Separate bonded vs. non-bonded distances
+        bondedInds = get_positions(self.polymer.numMonomers)
+        unbondedInds = np.array(list(set(range(self.polymer.numMonomers)) - set(bondedInds)))
+        bondedDists = pairwiseDists[bondedInds]
+        unbondedDists = pairwiseDists[unbondedInds]
 
-            r = 0
-
-            if r <= self.r_max and r >= (2*self.r_eq - self.r_max):
-                E += 1
-            else:
-                E += inf
-
+        unbondedOverlaps = unbondedDists[unbondedDists < self.polymer.monomerDiam]
+        E += self.epsilon*((self.polymer.monomerDiam/unbondedOverlaps)**12 - (self.polymer.monomerDiam/unbondedOverlaps)**6 + 1).sum()
         
+        bondedOverlaps = bondedDists[(bondedDists <= self.r_max) & (bondedDists >= (2*self.r_eq - self.r_max))]
+        E += (-self.k_f/2)*(self.r_max - self.r_eq)**2*np.log(1 - ((bondedOverlaps-self.r_eq)/(self.r_max-self.r_eq))**2).sum()
+        if len(bondedOverlaps) != len(bondedDists):
+            E += inf
 
+        # Generate mx3 array of points that go into all the bond angles
+        # Get bond angles, then apply function to get energy there
+        groups = np.column_stack((monomers[:-2], monomers[1:-1], monomers[2:]))
+        E += ((1/2)*self.k_theta*(pi - np.apply_along_axis(find_bond_angle, 1, groups))**2).sum()
+
+
+    
         return E
     
+
+
     def betweenMonomersandLattice(self, monomers):
-        # Find the energy associated with monomers close to lattice points
-        for monomer in monomers:
-            print("yes")
-        return 0
+        
+        boundaries = np.array([self.x, self.y, self.z])
+        U_c = -1*self.epsilon_PN*((self.polymer.monomerDiam/self.r_c)**12 - 2*(self.polymer.monomerDiam/self.r_c)**6)
+
+        # Use cdist to get all pairwise distances between lattice and polymer
+        dist = cdist(monomers, self.particles.lattice, metric=periodic_dist, L=boundaries)
+
+        overlap_dist = self.polymer.monomerDiam/2 + self.particles.diameter/2
+
+        overlaps = dist[dist < overlap_dist]
+
+        E = (self.epsilon_PN*((self.polymer.monomerDiam/overlaps)**12 
+                                - 2*(self.polymer.monomerDiam/overlaps)**6) + U_c).sum()
+        
+        
+        return E
+
+
+    def run(self, numSteps):
+        # Calculate starting energy of the system
+        prevE = self.betweenMonomers(self.polymer.monomers) + self.betweenMonomersandLattice(self.polymer.monomers)
+        
+        # Find the starting center of mass
+        startingCenterOfMass = np.mean(self.polymer.monomers, axis=0)
+
+        # Compute the starting radius of gyration
+        radiusOfGyration =  np.sqrt(np.sum(np.sum((self.polymer.monomers-startingCenterOfMass)**2, axis=1)) / self.polymer.numMonomers)
     
-    def run(self):
-        # Calculate starting energy
-        E = self.betweenMonomers(self.polymer.monomers) + self.betweenMonomersandLattice(self.polymer.monomers)
-        
-        centerOfMass = np.mean(self.polymer.monomers, axis=0)
-
-        # Compute the radius of gyration
-        radiusOfGyration =  np.sqrt(np.sum(np.sum((self.polymer.monomers-centerOfMass)**2, axis=1)) / self.polymer.numMonomers)
-        
-
-        # Choose a random monomer to displace
-        prevE = E
+        startingMonomers = self.polymer.monomers.copy()
+        step = 0
         # While we haven't exceeded the center of mass thing, do MC
-        while True:
+        while step < numSteps:
+            E = 0
             index = np.random.randint(self.polymer.numMonomers)
-            currentMonomers = self.polymer.monomers
+            currentMonomers = self.polymer.monomers.copy()
 
             # Move our chosen monomer by dx, dy, dz (which are all somewhere between -delta and +delta)
             currentMonomers[index] = (currentMonomers[index] + (np.array([np.random.random()*2*self.delta, 
@@ -158,18 +191,49 @@ class Sim:
             # Get energy for change
             E = self.betweenMonomers(currentMonomers) + self.betweenMonomersandLattice(currentMonomers)
 
-            p = min(1, exp(-1*(E-prevE)/self.k_bT))
+            # print(prevE)
+            # print(E)
+            # print("-----")
+
+            p = min([1, exp(-1*(E-prevE)/self.k_bT)])
+
+            # print(p)
 
             accept = np.random.random() <= p
             if accept:
+                # print("accept")
+                # print("-----")
                 self.polymer.monomers = currentMonomers
-                preV = E
+                prevE = E # Update our previous energy
 
-            # Calculate c of m and r of g again
+                # Calculate c of m and r of g again
+                centerOfMass = np.mean(self.polymer.monomers, axis=0)
+                print(np.linalg.norm(abs(startingCenterOfMass-centerOfMass)))
+                radiusOfGyration =  np.sqrt(np.sum(np.sum((self.polymer.monomers-centerOfMass)**2, axis=1)) / self.polymer.numMonomers)
+                print(radiusOfGyration)
+            # else:
+            #     print("reject")
+            #     print("-----")
+            step += 1
 
-    
+        fig = plt.figure()
+        ax = plt.axes(projection='3d')
 
-    
+        polyX = [row[0] for row in self.polymer.monomers]
+        polyY = [row[1] for row in self.polymer.monomers]
+        polyZ = [row[2] for row in self.polymer.monomers]
+
+        startingX = [row[0] for row in startingMonomers]
+        startingY = [row[1] for row in startingMonomers]
+        startingZ = [row[2] for row in startingMonomers]
+
+
+        ax.plot3D(polyX,polyY,polyZ)
+        ax.plot3D(startingX, startingY, startingZ)
+        plt.show()
+                
+
+
     def visualize(self, showLattice):
         fig = plt.figure()
         ax = plt.axes(projection='3d')
