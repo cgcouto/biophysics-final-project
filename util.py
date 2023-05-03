@@ -1,13 +1,9 @@
 import numpy as np
 
-def periodic_dist(u, v, L):
-    # calculate the vector difference between u and v
-    d = u - v
-    # apply the minimum image convention (to handle periodic boundary conditions)
-    d = d - L * np.rint(d / L)
-    # return the Euclidean norm of d
-    return np.linalg.norm(d)
-    
+# These are some helper functions used in multiple files!
+
+# 
+# points () : 
 def find_bond_angle(points):
 
     A = points[:3]
@@ -20,6 +16,7 @@ def find_bond_angle(points):
     angle = np.arccos(np.dot(vector_AB, vector_BC) / (np.linalg.norm(vector_AB)*np.linalg.norm(vector_BC)))
 
     return angle
+
 
 def get_positions(m):
     inds = []
